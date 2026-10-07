@@ -5,42 +5,37 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Postgres struct {
-	mu   sync.Mutex
-	conn *pgx.Conn
+	pool *pgxpool.Pool
 }
 
 func OpenPostgres(ctx context.Context, databaseURL string) (*Postgres, error) {
-	conn, err := pgx.Connect(ctx, databaseURL)
+	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
 		return nil, err
 	}
-	if err := conn.Ping(ctx); err != nil {
-		_ = conn.Close(ctx)
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
 		return nil, err
 	}
-	return &Postgres{conn: conn}, nil
+	return &Postgres{pool: pool}, nil
 }
 
 func (p *Postgres) Close() {
-	if p == nil || p.conn == nil {
+	if p == nil || p.pool == nil {
 		return
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	_ = p.conn.Close(context.Background())
+	p.pool.Close()
 }
 func (p *Postgres) Migrate(ctx context.Context) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS mailboxes (
             id text PRIMARY KEY,
@@ -107,7 +102,7 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS messages_mailbox_received_idx ON messages(mailbox_id, received_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS messages_account_received_idx ON messages(account_id, received_at DESC)`,
 	}
-	tx, err := p.conn.Begin(ctx)
+	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -121,12 +116,10 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 }
 
 func (p *Postgres) UpsertMailboxes(ctx context.Context, mailboxes []Mailbox) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	if len(mailboxes) == 0 {
 		return nil
 	}
-	tx, err := p.conn.Begin(ctx)
+	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -174,9 +167,7 @@ func (p *Postgres) UpsertMailboxes(ctx context.Context, mailboxes []Mailbox) err
 // are compared in their normalized lowercase form. Non-available rows are
 // never touched, so orders and message history stay intact.
 func (p *Postgres) PruneMailboxes(ctx context.Context, accountID string, keepAddresses []string) (int, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	tx, err := p.conn.Begin(ctx)
+	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -208,9 +199,7 @@ func (p *Postgres) PruneMailboxes(ctx context.Context, accountID string, keepAdd
 // preserved. It reports whether a row was deleted; a missing row returns false
 // without an error so repeated calls are idempotent.
 func (p *Postgres) DeleteMailboxByAnonymousID(ctx context.Context, accountID, anonymousID string) (bool, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	tag, err := p.conn.Exec(ctx, `DELETE FROM mailboxes WHERE account_id=$1 AND anonymous_id=$2 AND status='available'`, accountID, anonymousID)
+	tag, err := p.pool.Exec(ctx, `DELETE FROM mailboxes WHERE account_id=$1 AND anonymous_id=$2 AND status='available'`, accountID, anonymousID)
 	if err != nil {
 		return false, err
 	}
@@ -218,8 +207,6 @@ func (p *Postgres) DeleteMailboxByAnonymousID(ctx context.Context, accountID, an
 }
 
 func (p *Postgres) ListMailboxes(ctx context.Context, status string, limit int) ([]Mailbox, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
@@ -231,7 +218,7 @@ func (p *Postgres) ListMailboxes(ctx context.Context, status string, limit int) 
 	}
 	query += fmt.Sprintf(` ORDER BY created_at DESC LIMIT $%d`, len(args)+1)
 	args = append(args, limit)
-	rows, err := p.conn.Query(ctx, query, args...)
+	rows, err := p.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -247,10 +234,44 @@ func (p *Postgres) ListMailboxes(ctx context.Context, status string, limit int) 
 	return out, rows.Err()
 }
 
+// serializableRetryMax 是 Serializable 事务遇到序列化失败
+// （SQLSTATE 40001）时的最大重试次数。多副本/高并发下序列化冲突是
+// 正常现象，应退避重试而不是把 500 抛给调用方。
+const serializableRetryMax = 3
+
+func isSerializationFailure(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "40001"
+	}
+	return false
+}
+
 func (p *Postgres) AllocateMailbox(ctx context.Context, params AllocateParams) (*Order, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	tx, err := p.conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	var lastErr error
+	for attempt := 0; attempt < serializableRetryMax; attempt++ {
+		if attempt > 0 {
+			// 指数退避：100ms, 200ms, 400ms…
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(1<<uint(attempt-1)) * 100 * time.Millisecond):
+			}
+		}
+		order, err := p.allocateMailboxOnce(ctx, params)
+		if err == nil {
+			return order, nil
+		}
+		if !isSerializationFailure(err) || errors.Is(err, ErrNoInventory) {
+			return nil, err
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func (p *Postgres) allocateMailboxOnce(ctx context.Context, params AllocateParams) (*Order, error) {
+	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return nil, err
 	}
@@ -300,12 +321,10 @@ func (p *Postgres) AllocateMailbox(ctx context.Context, params AllocateParams) (
 }
 
 func (p *Postgres) ListOrders(ctx context.Context, limit int) ([]Order, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	rows, err := p.conn.Query(ctx, `
+	rows, err := p.pool.Query(ctx, `
 		SELECT o.id, COALESCE(o.external_id,''), o.mailbox_id, m.address, o.status, o.valid_for_seconds,
 		       COALESCE(o.activated_at, '0001-01-01 00:00:00+00'::timestamptz), o.expires_at, o.created_at
         FROM orders o JOIN mailboxes m ON m.id=o.mailbox_id
@@ -330,11 +349,9 @@ func (p *Postgres) ListOrders(ctx context.Context, limit int) ([]Order, error) {
 }
 
 func (p *Postgres) ReissueOrderPickup(ctx context.Context, orderID string, tokenHash, codeHash []byte, expiresAt time.Time) (*Order, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	var order Order
 	validForSeconds := int64(normalizedValidFor(0, expiresAt, time.Now()) / time.Second)
-	err := p.conn.QueryRow(ctx, `
+	err := p.pool.QueryRow(ctx, `
 		UPDATE orders
 		SET pickup_token_hash=$2, pickup_code_hash=$3, valid_for_seconds=$4, activated_at=NULL, expires_at=$5
 		WHERE id=$1 AND status='active'
@@ -344,17 +361,15 @@ func (p *Postgres) ReissueOrderPickup(ctx context.Context, orderID string, token
 	if err != nil {
 		return nil, err
 	}
-	if err := p.conn.QueryRow(ctx, `SELECT address FROM mailboxes WHERE id=$1`, order.MailboxID).Scan(&order.MailboxAddress); err != nil {
+	if err := p.pool.QueryRow(ctx, `SELECT address FROM mailboxes WHERE id=$1`, order.MailboxID).Scan(&order.MailboxAddress); err != nil {
 		return nil, err
 	}
 	return &order, nil
 }
 
 func (p *Postgres) ActivatePickup(ctx context.Context, tokenHash, codeHash []byte) (*Pickup, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	var pickup Pickup
-	err := p.conn.QueryRow(ctx, `
+	err := p.pool.QueryRow(ctx, `
 		UPDATE orders o
 		SET activated_at=COALESCE(o.activated_at, now()),
 			expires_at=CASE WHEN o.activated_at IS NULL THEN now() + (o.valid_for_seconds * interval '1 second') ELSE o.expires_at END
@@ -370,15 +385,13 @@ func (p *Postgres) ActivatePickup(ctx context.Context, tokenHash, codeHash []byt
 }
 
 func (p *Postgres) SaveMessage(ctx context.Context, message Message) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	if message.ID == "" {
 		message.ID = uuid.NewString()
 	}
 	if message.ReceivedAt.IsZero() {
 		message.ReceivedAt = time.Now()
 	}
-	_, err := p.conn.Exec(ctx, `
+	_, err := p.pool.Exec(ctx, `
 		INSERT INTO messages (id, order_id, mailbox_id, account_id, provider_message_id, sender, recipient, subject, body_text, body_html, content_type, otp_code, received_at)
 		VALUES ($1,NULLIF($2,''),$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
         ON CONFLICT (account_id, provider_message_id, mailbox_id) DO UPDATE SET
@@ -391,8 +404,6 @@ func (p *Postgres) SaveMessage(ctx context.Context, message Message) error {
 }
 
 func (p *Postgres) ListMessages(ctx context.Context, mailboxID, accountID, query string, limit int) ([]Message, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
@@ -407,11 +418,11 @@ func (p *Postgres) ListMessages(ctx context.Context, mailboxID, accountID, query
 		conditions = append(conditions, fmt.Sprintf("msg.account_id=$%d", len(args)))
 	}
 	if query != "" {
-		args = append(args, "%"+strings.ToLower(query)+"%")
-		conditions = append(conditions, fmt.Sprintf("(lower(msg.sender) LIKE $%d OR lower(msg.subject) LIKE $%d OR lower(msg.recipient) LIKE $%d OR lower(msg.body_text) LIKE $%d)", len(args), len(args), len(args), len(args)))
+		args = append(args, "%"+escapeLikePattern(strings.ToLower(query))+"%")
+		conditions = append(conditions, fmt.Sprintf("(lower(msg.sender) LIKE $%d ESCAPE '\\' OR lower(msg.subject) LIKE $%d ESCAPE '\\' OR lower(msg.recipient) LIKE $%d ESCAPE '\\' OR lower(msg.body_text) LIKE $%d ESCAPE '\\')", len(args), len(args), len(args), len(args)))
 	}
 	args = append(args, limit)
-	rows, err := p.conn.Query(ctx, `
+	rows, err := p.pool.Query(ctx, `
 		SELECT msg.id, COALESCE(msg.order_id,''), msg.mailbox_id, msg.account_id, msg.provider_message_id,
 		       msg.sender, msg.recipient, msg.subject, msg.body_text, msg.body_html, msg.content_type, msg.otp_code, msg.received_at, msg.created_at
 		FROM messages msg
@@ -424,12 +435,10 @@ func (p *Postgres) ListMessages(ctx context.Context, mailboxID, accountID, query
 }
 
 func (p *Postgres) ListMessagesByOrder(ctx context.Context, orderID string, limit int) ([]Message, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	rows, err := p.conn.Query(ctx, `
+	rows, err := p.pool.Query(ctx, `
 		SELECT msg.id, o.id, msg.mailbox_id, msg.account_id, msg.provider_message_id,
 		       msg.sender, msg.recipient, msg.subject, msg.body_text, msg.body_html, msg.content_type, msg.otp_code, msg.received_at, msg.created_at
 		FROM orders o
@@ -444,9 +453,7 @@ func (p *Postgres) ListMessagesByOrder(ctx context.Context, orderID string, limi
 }
 
 func (p *Postgres) ListCollectTargets(ctx context.Context) ([]CollectTarget, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	rows, err := p.conn.Query(ctx, `
+	rows, err := p.pool.Query(ctx, `
 		SELECT m.id, m.account_id, m.address, m.forward_to_email
 		FROM mailboxes m
 		WHERE m.status IN ('available','reserved')
@@ -467,10 +474,8 @@ func (p *Postgres) ListCollectTargets(ctx context.Context) ([]CollectTarget, err
 }
 
 func (p *Postgres) Stats(ctx context.Context) (*Stats, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	var stats Stats
-	err := p.conn.QueryRow(ctx, `
+	err := p.pool.QueryRow(ctx, `
 		SELECT
 			count(*) FILTER (WHERE status='available'),
 			count(*) FILTER (WHERE status='reserved'),
@@ -479,13 +484,20 @@ func (p *Postgres) Stats(ctx context.Context) (*Stats, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := p.conn.QueryRow(ctx, `SELECT count(*) FROM messages`).Scan(&stats.TotalMessages); err != nil {
+	if err := p.pool.QueryRow(ctx, `SELECT count(*) FROM messages`).Scan(&stats.TotalMessages); err != nil {
 		return nil, err
 	}
-	if err := p.conn.QueryRow(ctx, `SELECT count(*) FROM orders WHERE status='active' AND (activated_at IS NULL OR expires_at > now())`).Scan(&stats.ActiveOrders); err != nil {
+	if err := p.pool.QueryRow(ctx, `SELECT count(*) FROM orders WHERE status='active' AND (activated_at IS NULL OR expires_at > now())`).Scan(&stats.ActiveOrders); err != nil {
 		return nil, err
 	}
 	return &stats, nil
+}
+
+// escapeLikePattern 转义 LIKE 模式中的通配符与转义符，让用户输入按
+// 字面量匹配（配合 LIKE ... ESCAPE '\' 使用），防止输入 "%" 匹配全表。
+func escapeLikePattern(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(value)
 }
 
 func scanMessages(rows pgx.Rows) ([]Message, error) {
@@ -503,9 +515,7 @@ func scanMessages(rows pgx.Rows) ([]Message, error) {
 }
 
 func (p *Postgres) ExpireOrders(ctx context.Context) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	_, err := p.conn.Exec(ctx, `
+	_, err := p.pool.Exec(ctx, `
         WITH expired AS (
             UPDATE orders SET status='expired'
 			WHERE status='active' AND activated_at IS NOT NULL AND expires_at <= now()

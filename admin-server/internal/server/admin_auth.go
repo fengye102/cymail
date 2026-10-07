@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -20,6 +21,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/argon2"
+)
+
+// trustedProxiesOnce 缓存 TRUSTED_PROXIES 的解析结果，避免每个请求重复解析。
+var (
+	trustedProxiesOnce  sync.Once
+	trustedProxiesValue trustedProxyList
 )
 
 const (
@@ -58,12 +65,13 @@ type loginAttempt struct {
 }
 
 type adminAuthStore struct {
-	mu          sync.Mutex
-	path        string
-	credential  *adminCredentialFile
-	sessions    map[[32]byte]time.Time
-	attempts    map[string]loginAttempt
-	lastCleanup time.Time
+	mu             sync.Mutex
+	path           string
+	credential     *adminCredentialFile
+	sessions       map[[32]byte]time.Time
+	attempts       map[string]loginAttempt
+	lastCleanup    time.Time
+	bootstrapToken string // 首次初始化管理员用的一次性引导令牌；setup 成功后清空
 }
 
 func openAdminAuthStore(path string) (*adminAuthStore, error) {
@@ -91,6 +99,36 @@ func openAdminAuthStore(path string) (*adminAuthStore, error) {
 	}
 	store.credential = &credential
 	return store, nil
+}
+
+// ensureBootstrapToken 在管理员尚未初始化时生成一次性引导令牌并打印到日志，
+// 让首次部署可以通过反代（而非仅限本机）完成管理员初始化。令牌只在
+// 内存中保存，管理员创建成功后立即作废。
+func (a *adminAuthStore) ensureBootstrapToken() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.credential != nil || a.bootstrapToken != "" {
+		return
+	}
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		// 生成失败时退化为仅允许本机初始化（bootstrapAuthorized 的 loopback 分支）。
+		log.Printf("WARNING: 生成管理员引导令牌失败，首次设置将只能在本机完成: %v", err)
+		return
+	}
+	a.bootstrapToken = base64.RawURLEncoding.EncodeToString(raw)
+	log.Printf("管理员尚未初始化。本次启动的引导令牌（仅在创建第一个管理员前有效）: %s", a.bootstrapToken)
+	log.Printf("首次部署请在管理页创建管理员，并在请求头携带 X-Bootstrap-Token: %s", a.bootstrapToken)
+}
+
+// bootstrapTokenAllowed 校验请求携带的引导令牌。恒时比较；管理员已存在时恒为 false。
+func (a *adminAuthStore) bootstrapTokenAllowed(provided string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.credential != nil || a.bootstrapToken == "" || provided == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(a.bootstrapToken), []byte(provided)) == 1
 }
 
 func validateStoredCredential(credential *adminCredentialFile) error {
@@ -167,6 +205,7 @@ func (a *adminAuthStore) setup(username, password string) (string, time.Time, er
 		return "", time.Time{}, err
 	}
 	a.credential = credential
+	a.bootstrapToken = "" // 引导令牌一次性使用，管理员创建后立即作废
 	return a.newSessionLocked()
 }
 
@@ -323,8 +362,8 @@ func (s *Server) adminAuthStatus(c *gin.Context) {
 }
 
 func (s *Server) setupAdmin(c *gin.Context) {
-	if !requestIP(c).IsLoopback() {
-		fail(c, http.StatusForbidden, "首次设置管理员只能在服务器本机完成")
+	if !s.bootstrapAuthorized(c) {
+		fail(c, http.StatusForbidden, "首次设置管理员需要在服务器本机操作，或携带启动日志中的引导令牌（请求头 X-Bootstrap-Token）")
 		return
 	}
 	var req adminAuthRequest
@@ -341,7 +380,7 @@ func (s *Server) setupAdmin(c *gin.Context) {
 		fail(c, code, err.Error())
 		return
 	}
-	setAdminSessionCookie(c, token, expiresAt)
+	setAdminSessionCookie(c, s, token, expiresAt)
 	c.JSON(http.StatusCreated, apiResp{Success: true, Data: gin.H{"authenticated": true}})
 }
 
@@ -351,7 +390,7 @@ func (s *Server) loginAdmin(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "请输入用户名和密码")
 		return
 	}
-	token, expiresAt, err := s.adminAuth.login(req.Username, req.Password, requestIP(c).String())
+	token, expiresAt, err := s.adminAuth.login(req.Username, req.Password, adminLoginClientKey(req.Username, requestIP(c)))
 	if err != nil {
 		code := http.StatusUnauthorized
 		if errors.Is(err, errAdminAuthUnavailable) {
@@ -362,48 +401,164 @@ func (s *Server) loginAdmin(c *gin.Context) {
 		fail(c, code, err.Error())
 		return
 	}
-	setAdminSessionCookie(c, token, expiresAt)
+	setAdminSessionCookie(c, s, token, expiresAt)
 	ok(c, gin.H{"authenticated": true})
 }
 
 func (s *Server) logoutAdmin(c *gin.Context) {
 	token, _ := c.Cookie(adminSessionCookie)
 	s.adminAuth.logout(token)
-	http.SetCookie(c.Writer, &http.Cookie{Name: adminSessionCookie, Value: "", Path: "/", HttpOnly: true, Secure: secureRequest(c), SameSite: http.SameSiteStrictMode, MaxAge: -1, Expires: time.Unix(1, 0)})
+	http.SetCookie(c.Writer, &http.Cookie{Name: adminSessionCookie, Value: "", Path: "/", HttpOnly: true, Secure: s.secureRequest(c), SameSite: http.SameSiteStrictMode, MaxAge: -1, Expires: time.Unix(1, 0)})
 	ok(c, gin.H{"authenticated": false})
 }
 
-func setAdminSessionCookie(c *gin.Context, token string, expiresAt time.Time) {
+func setAdminSessionCookie(c *gin.Context, s *Server, token string, expiresAt time.Time) {
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name: adminSessionCookie, Value: token, Path: "/", HttpOnly: true,
-		Secure: secureRequest(c), SameSite: http.SameSiteStrictMode,
+		Secure: s.secureRequest(c), SameSite: http.SameSiteStrictMode,
 		Expires: expiresAt, MaxAge: int(time.Until(expiresAt).Seconds()),
 	})
 }
 
-func secureRequest(c *gin.Context) bool {
+// secureRequest 判断当前请求是否走 HTTPS：
+//   - 直连 TLS；
+//   - 直连对端是受信代理且 X-Forwarded-Proto 为 https；
+//   - 服务配置了 HTTPS 的 PUBLIC_BASE_URL（生产双域名拓扑统一强制 Secure，
+//     避免依赖转发头是否被正确携带）。
+func (s *Server) secureRequest(c *gin.Context) bool {
 	if c.Request.TLS != nil {
 		return true
+	}
+	if strings.HasPrefix(s.publicBaseURL, "https://") {
+		return true
+	}
+	// X-Forwarded-Proto 只在直连对端是受信代理时才采信，防止直连伪造。
+	if !directPeerTrusted(c) {
+		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(strings.Split(c.GetHeader("X-Forwarded-Proto"), ",")[0]), "https")
 }
 
-func requestIP(c *gin.Context) net.IP {
+// bootstrapAuthorized 决定首次设置管理员是否放行：
+//   - 请求携带引导令牌（X-Bootstrap-Token，值在服务首次启动、管理员未初始化时打印到日志），或
+//   - 直连对端是本机 loopback（纯本机部署、无反向代理的场景）。
+//
+// 引导令牌只允许使用一次，管理员初始化完成后立即作废。
+func (s *Server) bootstrapAuthorized(c *gin.Context) bool {
+	if s.adminAuth.bootstrapTokenAllowed(strings.TrimSpace(c.GetHeader("X-Bootstrap-Token"))) {
+		return true
+	}
+	if ip := requestIP(c); ip.IsLoopback() && directPeerTrusted(c) {
+		return true
+	}
+	return false
+}
+
+// adminLoginClientKey 生成登录失败限速的桶键：用户名 + 真实来源 IP。
+// 两者组合可以同时防住「同一 IP 撞多个用户名」和「分布式撞同一用户名」，
+// 避免退化为全局单桶后任何人都能锁死全体管理员。
+func adminLoginClientKey(username string, ip net.IP) string {
+	return strings.ToLower(strings.TrimSpace(username)) + "|" + ip.String()
+}
+
+// directPeerTrusted 判断请求的直连对端（TCP 层对端）是否属于受信代理。
+// 受信代理列表来自环境变量 TRUSTED_PROXIES（逗号分隔 CIDR 或 IP），
+// 未配置时默认信任 Docker 内网段与本机，使 api 在容器拓扑下能正确
+// 识别经 nginx/Caddy 转发而来的真实客户端 IP。
+func directPeerTrusted(c *gin.Context) bool {
+	return trustedProxyCIDRs().contains(requestPeerIP(c))
+}
+
+type trustedProxyList []*net.IPNet
+
+func trustedProxyCIDRs() trustedProxyList {
+	trustedProxiesOnce.Do(func() {
+		raw := strings.TrimSpace(os.Getenv("TRUSTED_PROXIES"))
+		var list trustedProxyList
+		if raw == "" {
+			// 默认：本机回环 + Docker 默认网桥/自定义网络常用网段 +
+			// Compose 内部网络默认网段。覆盖标准容器部署拓扑。
+			for _, cidr := range []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"} {
+				if _, ipnet, err := net.ParseCIDR(cidr); err == nil {
+					list = append(list, ipnet)
+				}
+			}
+		} else {
+			for _, part := range strings.Split(raw, ",") {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				if !strings.Contains(part, "/") {
+					if ip := net.ParseIP(part); ip != nil {
+						bits := 32
+						if ip.To4() == nil {
+							bits = 128
+						}
+						part = fmt.Sprintf("%s/%d", ip.String(), bits)
+					} else {
+						continue
+					}
+				}
+				if _, ipnet, err := net.ParseCIDR(part); err == nil {
+					list = append(list, ipnet)
+				}
+			}
+		}
+		trustedProxiesValue = list
+	})
+	return trustedProxiesValue
+}
+
+func (l trustedProxyList) contains(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	for _, ipnet := range l {
+		if ipnet.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// requestPeerIP 返回 TCP 直连对端 IP（不做任何转发头解析）。
+func requestPeerIP(c *gin.Context) net.IP {
 	host, _, err := net.SplitHostPort(c.Request.RemoteAddr)
 	if err != nil {
 		host = c.Request.RemoteAddr
 	}
-	remote := net.ParseIP(strings.Trim(host, "[]"))
-	if remote != nil && remote.IsLoopback() {
-		for _, header := range []string{"X-Forwarded-For", "X-Real-IP"} {
-			candidate := strings.TrimSpace(strings.Split(c.GetHeader(header), ",")[0])
-			if parsed := net.ParseIP(candidate); parsed != nil {
-				return parsed
-			}
-		}
-	}
-	if remote == nil {
+	return net.ParseIP(strings.Trim(host, "[]"))
+}
+
+// requestIP 返回请求的真实来源 IP：
+//   - 直连对端属于受信代理时，取 X-Forwarded-For 链中从右往左第一个
+//     不在受信列表内的地址（即代理追加的客户端真实 IP）；
+//   - 否则一律以直连对端为准，忽略转发头（不可信，可伪造）。
+func requestIP(c *gin.Context) net.IP {
+	peer := requestPeerIP(c)
+	if peer == nil {
 		return net.IPv4zero
 	}
-	return remote
+	if !trustedProxyCIDRs().contains(peer) {
+		return peer
+	}
+	xff := c.GetHeader("X-Forwarded-For")
+	if xff != "" {
+		parts := strings.Split(xff, ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			candidate := net.ParseIP(strings.TrimSpace(parts[i]))
+			if candidate == nil {
+				continue
+			}
+			if trustedProxyCIDRs().contains(candidate) {
+				continue
+			}
+			return candidate
+		}
+	}
+	if candidate := net.ParseIP(strings.TrimSpace(c.GetHeader("X-Real-IP"))); candidate != nil && !trustedProxyCIDRs().contains(candidate) {
+		return candidate
+	}
+	return peer
 }

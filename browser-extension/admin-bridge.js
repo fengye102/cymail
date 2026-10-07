@@ -26,30 +26,16 @@
 
     try {
       const payload = message.payload || {};
-      const authorizationCode = String(payload.authorization_code || "").trim();
-      const expiresAt = new Date(payload.expires_at).getTime();
       if (payload.version !== 1) throw new Error("不支持的授权请求版本");
-      const kind = payload.kind === "forwarding" ? "forwarding" : "icloud";
-      const pattern = kind === "forwarding" ? /^fwa_[A-Za-z0-9_-]{32,100}$/ : /^iba_[A-Za-z0-9_-]{32,100}$/;
-      if (!pattern.test(authorizationCode)) throw new Error("一次性授权凭证无效");
-      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) throw new Error("一次性授权请求已过期");
-
-      if (kind === "forwarding") {
-        if (payload.provider !== "netease_163" || !/@163\.com$/i.test(String(payload.email || ""))) {
-          throw new Error("163 网页授权目标无效");
-        }
-      }
-
-      await chrome.storage.local.set({
-        cymail_pending_auth: {
-          backend: normalizeBackend(payload.backend),
-          authorization_code: authorizationCode,
-          expires_at: new Date(expiresAt).toISOString(),
-          kind,
-          email: kind === "forwarding" ? String(payload.email).toLowerCase() : "",
-          provider: kind === "forwarding" ? payload.provider : ""
-        }
+      // 存储交给扩展 background 完成：background 能拿到 Chrome 校验过的
+      // 发送方 tab 地址（sender.url），以此核实“声明来源 = 实际页面来源”，
+      // 防止任意本地页面伪造 begin 消息覆写待授权数据。
+      const result = await chrome.runtime.sendMessage({
+        type: "cymail_store_pending_auth",
+        declared_origin: window.location.origin,
+        payload: { ...payload, backend: normalizeBackend(payload.backend) }
       });
+      if (!result || !result.ok) throw new Error(result?.error || "扩展拒绝了本次授权请求");
       respond(true);
     } catch (error) {
       respond(false, error.message || String(error));

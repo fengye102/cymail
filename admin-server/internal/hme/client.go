@@ -442,6 +442,26 @@ func validTrustToken(token string) bool {
 	return true
 }
 
+// HTTPStatusError 携带上游 HTTP 状态码的结构化错误。调用方应基于
+// StatusCode 判断错误类别（如 401/403 会话失效），而不是对错误文本
+// 做子串匹配。
+type HTTPStatusError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *HTTPStatusError) Error() string {
+	if e.Message == "" {
+		return fmt.Sprintf("HTTP %d: %s", e.StatusCode, http.StatusText(e.StatusCode))
+	}
+	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Message)
+}
+
+// statusErrf 构造携带状态码的错误，文本格式由调用方保持与旧实现一致。
+func statusErrf(code int, format string, args ...any) *HTTPStatusError {
+	return &HTTPStatusError{StatusCode: code, Message: fmt.Sprintf(format, args...)}
+}
+
 func safeAppleHTTPError(status int, body string) error {
 	message := ""
 	if gjson.Valid(body) {
@@ -459,7 +479,7 @@ func safeAppleHTTPError(status int, body string) error {
 	if len(message) > 200 {
 		message = message[:200]
 	}
-	return fmt.Errorf("HTTP %d: %s", status, message)
+	return &HTTPStatusError{StatusCode: status, Message: message}
 }
 
 func (c *Client) sleepRetry(attempt int) {

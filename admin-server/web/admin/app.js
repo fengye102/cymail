@@ -889,12 +889,35 @@ function showPickupPairs(deliveries, failures = []) {
   $("delivery").scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
+// fetchListCapped 按后端允许的最大单页上限拉取列表。后端暂不支持分页
+// （无 offset 参数），当返回条数达到上限时说明数据可能被截断——此时
+// 通过状态栏给出显式告警，绝不静默丢数据。
+let inventoryTruncationNoted = false;
+async function fetchListCapped(path, listKey, maxLimit, label) {
+  const data = await api(`${path}?limit=${maxLimit}`);
+  const items = (data && data[listKey]) || [];
+  if (items.length >= maxLimit) {
+    if (!inventoryTruncationNoted) {
+      inventoryTruncationNoted = true;
+      setStatus(`注意：${label}数量达到单次拉取上限（${maxLimit} 条），页面仅显示前 ${maxLimit} 条，如需完整数据请导出或联系管理员调整。`);
+    }
+  } else {
+    inventoryTruncationNoted = false;
+  }
+  return items;
+}
+
 async function loadAll() {
   try {
-    const [accounts, mailboxes, orders, messages, stats, schedulerJobs] = await Promise.all([
-      api("/api/accounts"), api("/api/mailboxes?limit=1000"), api("/api/orders?limit=500"), api("/api/messages?limit=500"), api("/api/post-office/stats"), api("/api/scheduler/jobs").catch(() => [])
+    // 后端对 limit 有硬上限（mailboxes/orders 1000、messages 500），
+    // 按 maxLimit 拉取并在触顶时显式告警（见 fetchListCapped）。
+    const [accounts, stats, schedulerJobs] = await Promise.all([
+      api("/api/accounts"), api("/api/post-office/stats"), api("/api/scheduler/jobs").catch(() => [])
     ]);
-    state = { accounts: accounts || [], mailboxes: mailboxes.mailboxes || [], orders: orders.orders || [], messages: messages.messages || [], schedulerJobs: schedulerJobs || [] };
+    const mailboxes = await fetchListCapped("/api/mailboxes", "mailboxes", 1000, "邮箱库存");
+    const orders = await fetchListCapped("/api/orders", "orders", 1000, "订单");
+    const messages = await fetchListCapped("/api/messages", "messages", 500, "邮件消息");
+    state = { accounts: accounts || [], mailboxes, orders, messages, schedulerJobs: schedulerJobs || [] };
     lastInboxMessages = state.messages;
     renderAccounts(); renderMailboxes(); renderOrders(); renderAllocationMailboxes(); renderInboxMessages(filterInboxMessages(lastInboxMessages)); renderMessages("latest-messages", state.messages.slice(0, 6)); renderSchedulerJobs();
     $("stat-total").textContent = state.mailboxes.length;
@@ -1299,7 +1322,7 @@ function handoffAuthorizationToExtension(payload) {
     const requestID = crypto.randomUUID();
     const timeout = setTimeout(() => {
       window.removeEventListener("message", receive);
-      reject(new Error("未检测到新版 CYMail 扩展，请在扩展管理页点击重新加载后重试"));
+      reject(new Error("未检测到新版 CYMail 扩展：请在扩展管理页点击重新加载；若当前是生产管理域名，请先运行 configure-domain.ps1 写入域名后再重试"));
     }, 2000);
     function receive(event) {
       const message = event.data;

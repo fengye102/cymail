@@ -151,8 +151,15 @@ func (c *Client) authStart(state *authState) error {
 
 // authFederate 提交用户名
 func (c *Client) authFederate(state *authState) error {
-	data := `{"accountName":"` + state.username + `","rememberMe":true}`
-	req, err := http.NewRequest("POST", authFederate, bytes.NewReader([]byte(data)))
+	// 用结构体序列化构造 JSON，避免拼接导致的报文注入/畸形请求。
+	payload, err := json.Marshal(struct {
+		AccountName string `json:"accountName"`
+		RememberMe  bool   `json:"rememberMe"`
+	}{AccountName: state.username, RememberMe: true})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest("POST", authFederate, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
@@ -330,10 +337,16 @@ func (c *Client) getTrust(state *authState) error {
 
 // authenticateWeb 认证 iCloud Web 服务
 func (c *Client) authenticateWeb(state *authState) error {
-	body := fmt.Sprintf(`{"dsWebAuthToken":"%s","accountCountryCode":"USA","extended_login":true,"trustToken":"%s"}`,
-		state.authToken, state.trustToken)
-
-	req, err := http.NewRequest("POST", authWebFmt, bytes.NewReader([]byte(body)))
+	payload, err := json.Marshal(struct {
+		DsWebAuthToken     string `json:"dsWebAuthToken"`
+		AccountCountryCode string `json:"accountCountryCode"`
+		ExtendedLogin      bool   `json:"extended_login"`
+		TrustToken         string `json:"trustToken"`
+	}{DsWebAuthToken: state.authToken, AccountCountryCode: "USA", ExtendedLogin: true, TrustToken: state.trustToken})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest("POST", authWebFmt, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}

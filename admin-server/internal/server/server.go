@@ -108,6 +108,7 @@ func NewWithConfigE(mgr *account.Manager, cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	adminAuth.ensureBootstrapToken()
 	s := &Server{mgr: mgr, apiKey: cfg.APIKey, adminAuth: adminAuth, fulfillment: cfg.Fulfillment, publicBaseURL: strings.TrimRight(cfg.PublicBaseURL, "/"), pickupLimiter: newPickupRateLimiter(5, 10*time.Minute), aliasCreateLimiter: newAliasCreateRateLimiter(), browserAuthByToken: make(map[[32]byte]*browserAuthSession), browserAuthByRequest: make(map[string]*browserAuthSession), dataDir: strings.TrimSpace(cfg.DataDir), maxBodyBytes: cfg.MaxBodyBytes, readTimeout: cfg.ReadTimeout, writeTimeout: cfg.WriteTimeout, idleTimeout: cfg.IdleTimeout}
 	s.schedRootCtx, s.schedRootCancel = context.WithCancel(context.Background())
 	s.r = gin.Default()
@@ -332,7 +333,7 @@ func (s *Server) createAlias(c *gin.Context) {
 		_ = s.mgr.SaveCookies(req.AccountID, client.Cookies)
 		// 旧接口会话失效时, 若已启用新接口 (Apple Account 管理) 仍可继续创建:
 		// 跳过旧接口别名列表, 直接走新接口 (创建请求会先刷新新接口会话)。
-		if _, aaOK := s.mgr.AppleAccountClient(req.AccountID); aaOK == nil && isSessionError(err.Error()) {
+		if _, aaOK := s.mgr.AppleAccountClient(req.AccountID); aaOK == nil && isSessionError(err) {
 			req.Label = strings.TrimSpace(req.Label)
 			if req.Label == "" {
 				req.Label = "Created " + time.Now().Format("2006-01-02 15:04")
@@ -354,7 +355,7 @@ func (s *Server) createAlias(c *gin.Context) {
 			})
 			return
 		}
-		if isSessionError(err.Error()) {
+		if isSessionError(err) {
 			fail(c, http.StatusUnauthorized, "iCloud 会话失效，请重新完成网页授权: "+err.Error())
 		} else {
 			fail(c, http.StatusBadGateway, "创建前读取隐藏邮箱失败: "+err.Error())
@@ -394,7 +395,7 @@ func (s *Server) createAlias(c *gin.Context) {
 			failAliasRateLimited(c, retryAfter, "Apple 暂时限制了创建频率，尚未达到总容量；请在建议时间后重试")
 		} else if errors.Is(err, hme.ErrAliasLimitReached) {
 			c.JSON(http.StatusConflict, apiResp{Success: false, Message: "Apple 明确拒绝创建：当前账号的隐藏邮件地址总容量已满", Code: "alias_capacity_reached"})
-		} else if isSessionError(msg) {
+		} else if isSessionError(err) {
 			fail(c, http.StatusUnauthorized, "iCloud 会话失效,请更新 Cookie: "+msg)
 		} else {
 			fail(c, http.StatusBadGateway, "创建邮箱失败: "+msg)
@@ -740,7 +741,7 @@ func (s *Server) loginAccount(c *gin.Context) {
 
 	client, err := s.mgr.HMEClientWithPassword(id, req.Password, otpProvider)
 	if err != nil {
-		if isSessionError(err.Error()) {
+		if isSessionError(err) {
 			fail(c, http.StatusUnauthorized, err.Error())
 		} else {
 			fail(c, http.StatusBadGateway, "登录失败: "+err.Error())
@@ -779,7 +780,7 @@ func (s *Server) listAliases(c *gin.Context) {
 	aliases, err := client.ListAliases()
 	_ = s.mgr.SaveCookies(accountID, client.Cookies)
 	if err != nil {
-		if isSessionError(err.Error()) {
+		if isSessionError(err) {
 			fail(c, http.StatusUnauthorized, "iCloud 会话失效,请更新 Cookie: "+err.Error())
 		} else {
 			fail(c, http.StatusBadGateway, err.Error())
@@ -896,12 +897,22 @@ func (s *Server) removeAliasFromInventory(ctx context.Context, accountID, anonym
 }
 
 // isSessionError 判断错误是否由会话失效引起。
-func isSessionError(msg string) bool {
-	m := strings.ToLower(msg)
-	return strings.Contains(m, "401") || strings.Contains(m, "403") ||
-		strings.Contains(m, "session") || strings.Contains(m, "cookie") ||
-		strings.Contains(m, "unauthorized") || strings.Contains(m, "认证") ||
-		strings.Contains(m, "会话校验失败")
+//
+// 只依据明确的错误类型或状态码（hme.HTTPStatusError 的 401/403、
+// ErrTrustSessionRequired），不再对自由文本做子串匹配——否则上游超时、
+// 限流等无关错误会被误判为「需重新授权」，掩盖真实故障。
+func isSessionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, hme.ErrTrustSessionRequired) {
+		return true
+	}
+	var httpErr *hme.HTTPStatusError
+	if errors.As(err, &httpErr) {
+		return httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden
+	}
+	return false
 }
 
 // reloadConfig 重新加载 accounts.json 配置文件。

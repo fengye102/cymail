@@ -8,6 +8,22 @@
 2. 选择“加载已解压的扩展程序”。
 3. 选择本目录 `browser-extension/cymail-icloud-auth`。
 
+## 生产部署必做：配置管理域名（configure-domain.ps1）
+
+扩展的内容脚本与主机权限默认只包含 `http://127.0.0.1/*` 和 `http://localhost/*`。
+**生产管理域名不在其中——跳过这一步，后台的“一键 iCloud/163 授权”会静默失效**
+（管理页提示“未检测到新版 CYMail 扩展”，其实是内容脚本根本没有注入到该域名）。
+
+首次部署（或更换管理域名）后，在 Windows 上执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\configure-domain.ps1 -Domain admin.example.com
+```
+
+脚本会把你的管理域名写入 `manifest.json` 的 `host_permissions` 与 `admin-bridge.js`
+内容脚本的 `matches`。写入后需要在浏览器扩展管理页点击“重新加载”才会生效。
+该文件不应提交真实域名到公共仓库（当前为私有存档）。
+
 ## Apple 授权
 
 1. 在 CYMail 后台先创建一个待授权账号。

@@ -119,6 +119,9 @@ func (s *Server) listInventory(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if items == nil {
+		items = []store.Mailbox{}
+	}
 	ok(c, gin.H{"count": len(items), "mailboxes": items})
 }
 
@@ -398,7 +401,11 @@ func (s *Server) publicPickup(c *gin.Context) {
 	}
 	attemptHash := sha256.Sum256([]byte(limiterValue))
 	attemptKey := string(attemptHash[:])
-	if !s.pickupLimiter.allowed(attemptKey) {
+	// 第二层桶：按真实来源 IP 限速。仅按提交的密钥分桶时，每次猜测都是
+	// 全新桶，对枚举毫无减速作用；叠加来源维度后，单个来源的爆破会
+	// 触发整体限速。
+	ipKey := "ip:" + requestIP(c).String()
+	if !s.pickupLimiter.allowed(attemptKey) || !s.pickupLimiter.allowed(ipKey) {
 		fail(c, http.StatusTooManyRequests, "尝试次数过多，请稍后再试")
 		return
 	}
@@ -412,6 +419,7 @@ func (s *Server) publicPickup(c *gin.Context) {
 	}
 	if errors.Is(err, fulfillment.ErrInvalidPickup) {
 		s.pickupLimiter.failure(attemptKey)
+		s.pickupLimiter.failure(ipKey)
 		fail(c, http.StatusUnauthorized, "取件链接或访问密钥无效")
 		return
 	}

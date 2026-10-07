@@ -44,9 +44,9 @@ async function collectICloudCookies() {
 }
 
 async function requestBackendPermission(url) {
-	// Chrome match patterns do not include ports. Grant only the selected host;
-	// the permission still covers the explicitly entered local development port.
-	const originPattern = `${url.protocol}//${url.hostname}/*`;
+  // Chrome match patterns 不含端口：权限按主机授予，端口一致性由
+  // background 在提交前用存储的 backend_port 核实（见 background.js）。
+  const originPattern = `${url.protocol}//${url.hostname}/*`;
   const granted = await chrome.permissions.request({ origins: [originPattern] });
   if (!granted) throw new Error("未授予访问 CYMail 后台地址的权限");
 }
