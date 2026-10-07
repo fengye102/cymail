@@ -1,0 +1,85 @@
+name: cymail
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: icloud_hme
+      POSTGRES_USER: icloud_hme
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U icloud_hme -d icloud_hme"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      CYMAIL_INTERNAL_API_KEY: ${CYMAIL_INTERNAL_API_KEY}
+      ICLOUD_HME_DATA_KEY: ${ICLOUD_HME_DATA_KEY}
+      DATABASE_URL: postgres://icloud_hme:${POSTGRES_PASSWORD}@db:5432/icloud_hme?sslmode=disable
+      PUBLIC_BASE_URL: https://${PICKUP_DOMAIN}
+    command: ["-addr", "0.0.0.0:8081", "-allow-insecure-http", "-collect-interval", "30s"]
+    expose:
+      - "8081"
+    volumes:
+      - app_data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8081/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  admin-web:
+    build:
+      context: ./web/admin
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    expose:
+      - "80"
+
+  pickup-web:
+    build:
+      context: ../pickup-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    expose:
+      - "80"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - admin-web
+      - pickup-web
+    environment:
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN}
+      PICKUP_DOMAIN: ${PICKUP_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  postgres_data:
+  app_data:
+  caddy_data:
+  caddy_config:

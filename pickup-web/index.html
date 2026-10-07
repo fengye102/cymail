@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CYMail 邮箱取件</title>
+  <link rel="stylesheet" href="styles.css?v=20260809-5">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="site-header">
+      <div class="brand"><span class="brand-star">✦</span><strong>CYMail</strong></div>
+      <section id="access-panel" class="header-pickup">
+        <strong class="header-pickup-label">取件凭证</strong>
+        <div class="access-row"><input id="credential" autocomplete="off" spellcheck="false" placeholder="粘贴：邮箱-----取件码"><button id="submit">进入邮箱</button></div>
+        <div class="credential-hint"><span>推荐格式</span><code>邮箱-----取件码</code><small>也兼容完整取件链接</small></div>
+        <div id="status" role="status"></div>
+      </section>
+      <div class="header-tools">
+        <div class="language"><button class="active" data-lang="zh">中文</button><button data-lang="en">EN</button></div>
+        <button id="logout" class="text-button hidden">退出</button>
+      </div>
+    </header>
+
+    <main>
+      <div id="workspace" class="workspace hidden">
+        <section class="workspace-card">
+          <div class="soft-shape"></div>
+          <h1 id="email">-</h1>
+          <div class="badges"><span id="mail-count">0 封邮件</span><span id="validity">有效期 -</span><span>自动刷新中</span><span>私密凭证访问</span></div>
+          <div class="divider"></div>
+          <div class="state-title">当前邮箱状态</div>
+          <div class="progress"><span id="progress-bar"></span></div>
+          <p id="remaining" class="remaining">正在计算有效期…</p>
+          <div class="workspace-actions"><button id="copy-email" class="light-button">复制邮箱</button><button id="refresh" class="light-button compact">刷新收件箱</button></div>
+        </section>
+
+        <section class="private-link-card">
+          <div><strong>已启用私密凭证访问</strong><p>仅可通过有效取件链接或“邮箱-----取件码”进入。公开创建、领取和切换入口已关闭。<span id="link-time"></span></p></div>
+          <div class="link-row"><input id="private-link" readonly><button id="copy-link">复制私密链接</button><button id="open-link" class="light-button compact">打开链接</button></div>
+        </section>
+
+        <section class="mail-workspace">
+          <aside class="inbox-pane">
+            <div class="pane-header"><div><strong>收件箱</strong><span id="inbox-count">0 封邮件</span></div><small id="last-refresh">尚未刷新</small></div>
+            <div id="message-list" class="message-list"></div>
+          </aside>
+
+          <article class="detail-pane">
+            <div class="detail-actions"><button id="load-remote-images" class="light-button compact hidden">加载远程图片</button><button id="copy-body" class="light-button compact">复制正文</button><button id="close-detail" class="light-button compact">关闭详情</button></div>
+            <div id="empty-detail" class="empty-detail"><span>✉</span><strong>选择一封邮件</strong><p>从左侧收件箱选择邮件后，可在这里查看内容和验证码。</p></div>
+            <div id="message-detail" class="hidden">
+              <section class="subject-card"><h2 id="detail-subject">无主题</h2><p><span id="detail-sender">未知发件人</span><span id="detail-recipient">收件：-</span><span id="detail-time">-</span></p></section>
+              <section class="body-card">
+                <iframe id="detail-html" class="email-html hidden" title="邮件原始内容" sandbox="" referrerpolicy="no-referrer"></iframe>
+                <div id="detail-text" class="email-preview">
+                  <div id="detail-brand" class="detail-brand"></div>
+                  <p id="detail-lead" class="detail-lead"></p>
+                  <div id="detail-otp" class="detail-otp hidden"><strong></strong></div>
+                  <pre id="detail-body"></pre>
+                </div>
+              </section>
+            </div>
+          </article>
+        </section>
+      </div>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="credential-parser.js?v=20260809-1" defer></script>
+  <script src="app.js?v=20260810-2" defer></script>
+</body>
+</html>

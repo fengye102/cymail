@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>登录 CYMail</title>
+  <link rel="stylesheet" href="/login.css?v=20260809-2">
+</head>
+<body>
+  <main class="login-shell">
+    <section class="login-card" aria-labelledby="auth-title">
+      <div class="brand-panel">
+        <a class="brand" href="/login.html" aria-label="CYMail 登录页">
+          <span class="brand-mark" aria-hidden="true">✦</span>
+          <span><strong>CYMail</strong><small>MAIL OPERATIONS</small></span>
+        </a>
+        <div class="brand-copy">
+          <span class="eyebrow">PRIVATE CONTROL CENTER</span>
+          <h1>你的邮箱总控台，<br>只对你开放。</h1>
+          <p>登录后才能查看邮箱库存、邮件内容和取件订单。账号密码仅用于这台 CYMail 服务。</p>
+        </div>
+        <ul class="security-list" aria-label="安全特性">
+          <li><span>01</span><div><strong>密码安全哈希</strong><small>不保存明文密码</small></div></li>
+          <li><span>02</span><div><strong>12 小时登录会话</strong><small>退出后立即失效</small></div></li>
+          <li><span>03</span><div><strong>失败次数限制</strong><small>防止连续尝试登录</small></div></li>
+        </ul>
+      </div>
+
+      <div class="form-panel">
+        <div class="form-heading">
+          <span id="mode-badge" class="mode-badge">正在检查</span>
+          <h2 id="auth-title">准备登录</h2>
+          <p id="auth-subtitle">正在读取系统登录状态，请稍候。</p>
+        </div>
+
+        <form id="auth-form" novalidate>
+          <label class="field" for="username">
+            <span>用户名</span>
+            <span class="input-wrap"><i aria-hidden="true">●</i><input id="username" name="username" autocomplete="username" minlength="2" maxlength="64" placeholder="输入管理员用户名" required></span>
+          </label>
+
+          <label class="field" for="password">
+            <span>密码</span>
+            <span class="input-wrap"><i aria-hidden="true">◆</i><input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" placeholder="输入登录密码" required><button class="reveal" type="button" data-reveal="password" aria-label="显示密码">显示</button></span>
+          </label>
+
+          <div id="setup-fields" class="setup-fields hidden">
+            <label class="field" for="confirm-password">
+              <span>确认密码</span>
+              <span class="input-wrap"><i aria-hidden="true">◆</i><input id="confirm-password" name="confirm-password" type="password" autocomplete="new-password" maxlength="256" placeholder="再次输入密码"><button class="reveal" type="button" data-reveal="confirm-password" aria-label="显示确认密码">显示</button></span>
+            </label>
+            <div class="strength" aria-live="polite">
+              <div class="strength-track"><i id="strength-bar"></i></div>
+              <span id="strength-text">至少 12 个字符</span>
+            </div>
+          </div>
+
+          <p id="auth-status" class="auth-status" role="alert"></p>
+          <button id="submit-auth" class="submit-button" type="submit" disabled><span>继续</span><i aria-hidden="true">→</i></button>
+        </form>
+
+        <div class="local-note"><span aria-hidden="true">⌁</span><p><strong>首次设置只允许在本机完成</strong><br><small>请不要把密码发到聊天、截图或写入浏览器扩展。</small></p></div>
+      </div>
+    </section>
+  </main>
+  <script src="/login.js?v=20260809-1" defer></script>
+</body>
+</html>

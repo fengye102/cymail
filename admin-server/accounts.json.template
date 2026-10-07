@@ -1,0 +1,18 @@
+{
+  "accounts": {
+    "acc_1": {
+      "id": "acc_1",
+      "name": "主号",
+      "real_email": "your_apple_id@example.com",
+      "icloud_email": "your_email@icloud.com",
+      "host": "icloud.com",
+      "proxy": "",
+      "cookies": {
+        "X-APPLE-WEBAUTH-TOKEN": "YOUR_WEBAUTH_TOKEN_HERE",
+        "X-APPLE-WEBAUTH-USER": "v=1:s=1:d=YOUR_DSID"
+      },
+      "app_password": "xxxx-xxxx-xxxx-xxxx",
+      "status": "pending"
+    }
+  }
+}

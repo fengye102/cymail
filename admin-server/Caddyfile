@@ -1,0 +1,9 @@
+{$ADMIN_DOMAIN} {
+  encode zstd gzip
+  reverse_proxy admin-web:80
+}
+
+{$PICKUP_DOMAIN} {
+  encode zstd gzip
+  reverse_proxy pickup-web:80
+}

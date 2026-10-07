@@ -1,0 +1,7 @@
+.git
+.env
+data
+build
+*.exe
+*.zip
+**/.DS_Store

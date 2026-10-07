@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CYMail 邮箱管理中心</title>
+  <link rel="stylesheet" href="/styles.css?v=20260811-aa2">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-star">✦</span><strong>CYMail</strong></div>
+    <nav>
+      <button class="nav active" data-view="overview"><span>◫</span>管理总览</button>
+      <button class="nav" data-view="mailboxes"><span>▣</span>全部邮箱</button>
+      <button class="nav" data-view="aliases"><span>＋</span>新建邮箱</button>
+      <button class="nav" data-view="forwarding"><span>↪</span>转发邮箱</button>
+      <button class="nav" data-view="inbox"><span>✉</span>统一收件箱</button>
+      <button class="nav" data-view="orders"><span>⌁</span>取件码与发货</button>
+      <button class="nav" data-view="accounts"><span>◎</span>iCloud 账号</button>
+    </nav>
+    <div class="sidebar-note"><strong>安全提醒</strong><p>系统不会保存明文取件码。如需再次发货，请重新签发，新码生成后旧码会立即失效。</p></div>
+  </aside>
+
+  <main>
+    <div class="main-shell">
+      <header class="topbar">
+        <div><h1 id="page-title">邮箱管理总览</h1><p id="page-subtitle">统一管理邮箱库存、邮件归档、取件码和发货订单</p></div>
+        <div class="header-actions"><span id="connection" class="connection"><i></i>等待连接</span><button id="collect" class="secondary">立即收取全部邮件</button><button id="logout" class="logout-button" type="button">退出登录</button></div>
+      </header>
+      <p id="status" role="status"></p>
+
+      <section id="view-overview" class="view">
+        <div class="metrics">
+          <article class="metric"><span>邮箱总数</span><strong id="stat-total">-</strong><small>统一库存</small></article>
+          <article class="metric green"><span>可用邮箱</span><strong id="stat-available">-</strong><small>可以立即发货</small></article>
+          <article class="metric blue"><span>有效取件码</span><strong id="stat-orders">-</strong><small>含待首次取件激活</small></article>
+          <article class="metric violet"><span>归档邮件</span><strong id="stat-messages">-</strong><small>所有邮箱合计</small></article>
+        </div>
+        <div class="overview-grid">
+          <article class="panel quick-panel">
+            <div class="panel-head"><h2>快速操作</h2></div>
+            <div class="quick-actions">
+              <button data-view-jump="orders"><b>＋</b><span><strong>分配邮箱并发货</strong><small>生成邮箱、长取件码和取件网址</small></span></button>
+              <button data-view-jump="mailboxes"><b>▣</b><span><strong>管理全部邮箱</strong><small>查看库存、账号、状态和邮件数量</small></span></button>
+              <button data-view-jump="inbox"><b>✉</b><span><strong>搜索所有邮件</strong><small>跨账号、跨邮箱查找验证码邮件</small></span></button>
+            </div>
+          </article>
+          <article class="panel forwarding-promo">
+            <span class="section-tag">FORWARDING</span>
+            <h2>转发邮箱管理</h2>
+            <p class="muted">集中查看每个 iCloud 账号的 Apple 转发目标、默认邮箱和网页收件授权状态。</p>
+            <button class="wide-button" data-view-jump="forwarding">进入转发邮箱 →</button>
+          </article>
+        </div>
+        <article class="panel"><div class="panel-head"><h2>最新邮件</h2><button class="text-action" data-view-jump="inbox">查看全部 →</button></div><div id="latest-messages" class="message-grid compact-grid"></div></article>
+      </section>
+
+      <section id="view-forwarding" class="view hidden">
+        <div class="forwarding-page-grid">
+          <article class="panel sync-panel">
+            <div class="panel-head"><div><span class="section-tag">WEBMAIL</span><h2>转发邮箱设置</h2><p class="muted">先选择 Apple 转发目标，再完成目的邮箱的网页登录授权。</p></div></div>
+            <div id="forwarding-flow" class="flow-steps" aria-label="转发邮箱配置进度">
+              <div class="flow-step is-current" data-forward-step="account"><b>1</b><span><strong>选择账号</strong><small>读取 Apple 设置</small></span></div>
+              <div class="flow-step" data-forward-step="destination"><b>2</b><span><strong>选择目标</strong><small>确认转发邮箱</small></span></div>
+              <div class="flow-step" data-forward-step="authorize"><b>3</b><span><strong>网页授权</strong><small>开始同步收件</small></span></div>
+            </div>
+            <label>iCloud 账号<select id="sync-account"></select></label>
+            <label>转发至（默认选中 Apple 当前设置）<select id="sync-forward"><option value="">请先选择账号</option></select></label>
+            <div id="forwarding-status" class="forwarding-status muted">选择账号后读取 Apple 转发设置。</div>
+            <div class="forward-actions"><button id="refresh-forwarding" class="secondary">刷新转发设置</button><button id="set-default-forwarding" class="secondary">设为 Apple 默认</button></div>
+            <div class="webmail-auth-note">
+              <strong>163 收件使用官方网页登录</strong>
+              <span>不需要客户端、IMAP 或授权码。密码和验证码只在 163 官方页面输入。</span>
+            </div>
+            <div id="forward-web-auth-box" class="browser-auth-box hidden"><small>一次性授权请求五分钟内有效。进入 163 收件箱后，使用页面右上角的 CYMail 浮层确认授权。</small><p id="forward-web-auth-status">等待开始 163 网页授权。</p></div>
+            <div class="forward-actions"><button id="authorize-forwarding">网页登录 163 并授权</button><button id="sync">同步邮箱库存</button></div>
+          </article>
+          <article class="panel forwarding-list-panel">
+            <div class="panel-head"><div><span class="section-tag">DESTINATIONS</span><h2>全部转发邮箱</h2><p class="muted">这里汇总 Apple 返回的所有转发目标及其网页收件状态。</p></div></div>
+            <div class="panel-kpis"><span><b id="forward-destination-count">0</b> 个转发目标</span><span class="positive"><b id="forward-authorized-count">0</b> 个已授权</span></div>
+            <div class="table-wrap"><table><thead><tr><th>iCloud 账号</th><th>转发邮箱</th><th>类型</th><th>Apple 默认</th><th>收件授权</th><th>最近验证</th><th>操作</th></tr></thead><tbody id="forwarding-rows"></tbody></table></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="view-aliases" class="view hidden">
+        <div class="alias-management-grid">
+          <article class="panel alias-create-panel">
+            <div class="panel-head"><div><span class="section-tag">HIDE MY EMAIL</span><h2>新建隐藏邮箱</h2><p class="muted">使用已授权的 iCloud 网页会话向 Apple 申请新地址。</p></div></div>
+            <div id="alias-flow" class="flow-steps alias-flow" aria-label="新建隐藏邮箱进度">
+              <div class="flow-step is-current" data-alias-step="account"><b>1</b><span><strong>选择账号</strong><small>确认网页会话</small></span></div>
+              <div class="flow-step" data-alias-step="generate"><b>2</b><span><strong>自动生成</strong><small>随机标签与地址</small></span></div>
+              <div class="flow-step" data-alias-step="sync"><b>3</b><span><strong>同步库存</strong><small>立即进入管理</small></span></div>
+            </div>
+            <label>iCloud 账号<select id="alias-account"><option value="">请先选择账号</option></select></label>
+            <div class="alias-capacity">
+              <div><span>使用中</span><strong id="alias-active-count">-</strong></div>
+              <div><span>CYMail 管理目标</span><strong id="alias-capacity-target">750</strong></div>
+            </div>
+            <div class="capacity-progress" aria-hidden="true"><i id="alias-capacity-progress"></i></div>
+            <p class="capacity-note">750 是 CYMail 的管理目标，不是本地绕过的 Apple 限额。每次能否创建仍以 Apple 返回结果为准。</p>
+            <div class="feature-chips"><span>随机字母数字标签</span><span>Apple 实时创建</span><span>自动同步库存</span></div>
+            <div id="alias-create-status" class="alias-operation-status muted">选择账号后可刷新地址列表。</div>
+            <div class="alias-create-actions">
+              <button id="create-alias" type="button" class="wide-button action-button"><span class="button-leading">＋</span><span class="button-copy"><strong>生成 1 个隐藏邮箱</strong><small>随机标签 · 自动同步库存</small></span></button>
+              <div class="alias-batch-builder">
+                <div class="alias-batch-heading"><div><strong>批量新建</strong><small>逐个向 Apple 申请，限速时自动续跑</small></div><div class="alias-batch-fields"><label>数量<input id="alias-batch-count" type="number" min="2" max="50" value="25" inputmode="numeric"></label><label>间隔（秒）<input id="alias-create-interval" type="number" min="0" max="86400" step="1" value="144" inputmode="numeric"></label></div></div>
+                <div class="alias-batch-presets" aria-label="批量创建数量"><button type="button" data-alias-batch-count="5">5 个</button><button type="button" data-alias-batch-count="10">10 个</button><button type="button" data-alias-batch-count="25">25 个</button><button type="button" data-alias-batch-count="50">50 个</button></div>
+                <p class="alias-batch-policy">默认每 144 秒创建 1 个；账号启用新接口（Apple Account 管理）时约 25 个/小时，仅旧接口时约 5 个/小时。Apple 临时限速时会显示倒计时并自动继续。</p>
+                <div id="alias-batch-progress" class="alias-batch-progress" role="progressbar" aria-label="批量创建进度" aria-valuemin="0" aria-valuemax="25" aria-valuenow="0"><i></i></div>
+                <div class="alias-batch-buttons"><button id="create-alias-batch" type="button" class="wide-button batch-create-button"><span>批量生成 25 个</span><i aria-hidden="true">→</i></button><button id="cancel-alias-batch" type="button" class="secondary alias-batch-cancel hidden">停止任务</button></div>
+              </div>
+            </div>
+            <div id="alias-batch-result" class="alias-batch-result hidden"><div class="alias-batch-result-head"><strong id="alias-batch-summary"></strong><button id="clear-alias-batch-result" type="button" class="text-action">收起</button></div><div id="alias-batch-items" class="alias-batch-items"></div></div>
+          </article>
+          <article class="panel alias-list-panel">
+            <div class="panel-head"><div><h2>已创建的隐藏邮箱</h2><p class="muted">停用可恢复；永久删除后无法在 CYMail 中恢复。</p></div><div class="filters"><input id="alias-query" placeholder="搜索邮箱地址或标签"><button id="refresh-aliases" class="secondary">刷新</button><button id="delete-selected-aliases" type="button" class="secondary" disabled>批量删除</button></div></div>
+            <div class="table-wrap alias-table-wrap"><table class="alias-table"><thead><tr><th class="alias-select-column"><input id="alias-select-all" type="checkbox" aria-label="全选当前筛选的隐藏邮箱"></th><th>标签</th><th>隐藏邮箱</th><th>转发至</th><th>状态</th><th id="alias-created-heading" aria-sort="descending"><button id="alias-created-sort" type="button" class="table-sort">创建时间 <span aria-hidden="true">↓</span></button></th><th>操作</th></tr></thead><tbody id="alias-rows"></tbody></table></div>
+          </article>
+        </div>
+        <article class="panel scheduler-panel">
+          <div class="panel-head"><div><span class="section-tag">SCHEDULER</span><h2>服务端定时创建任务</h2><p class="muted">不依赖浏览器页面：服务端按轮次自动创建隐藏邮箱，新接口优先、限速自动回退旧接口。创建后即使关闭管理页也会继续运行。</p></div><button id="refresh-scheduler" class="secondary">刷新任务</button></div>
+          <div class="scheduler-form">
+            <label>任务名称<input id="sched-name" placeholder="例如：夜间铺库存"></label>
+            <label>iCloud 账号<select id="sched-account"></select></label>
+            <label>轮次间隔（秒，≥30）<input id="sched-interval" type="number" min="30" max="86400" step="1" value="300" inputmode="numeric"></label>
+            <label>轮次（0 = 无限）<input id="sched-rounds" type="number" min="0" max="10000" step="1" value="0" inputmode="numeric"></label>
+            <button id="create-scheduler-job" class="secondary">创建定时任务</button>
+          </div>
+          <div class="table-wrap"><table><thead><tr><th>名称</th><th>账号</th><th>间隔</th><th>轮次</th><th>状态</th><th>已完成</th><th>已创建</th><th>最近轮次</th><th>操作</th></tr></thead><tbody id="scheduler-rows"></tbody></table></div>
+        </article>
+      </section>
+
+      <section id="view-mailboxes" class="view hidden">
+        <article class="panel">
+          <div class="panel-head mailbox-head"><div><h2>全部邮箱</h2><p class="muted">每个邮箱同时属于库存、统一收件箱和取件订单。</p><span id="mailbox-result-count" class="result-count">0 个邮箱</span></div><div class="filters"><input id="mailbox-query" placeholder="搜索邮箱地址或标签"><select id="mailbox-status"><option value="">全部状态</option><option value="available">可用</option><option value="reserved">已发货</option><option value="disabled">已停用</option><option value="retired">已退役</option></select></div></div>
+          <div class="table-wrap"><table><thead><tr><th>邮箱地址</th><th>所属账号</th><th>转发至</th><th>标签</th><th id="mailbox-created-heading" aria-sort="descending"><button id="mailbox-created-sort" type="button" class="table-sort">创建时间 <span aria-hidden="true">↓</span></button></th><th>邮件</th><th>库存状态</th><th>取件授权</th><th>剩余时间</th><th>操作</th></tr></thead><tbody id="mailbox-rows"></tbody></table></div>
+        </article>
+      </section>
+
+      <section id="view-inbox" class="view hidden">
+        <article class="panel">
+          <div class="panel-head"><div><h2>所有邮箱的邮件</h2><p class="muted">邮件默认按隐藏邮箱分类；可直接选择邮箱，也可输入地址或标签搜索。</p></div><div class="filters inbox-filters"><input id="message-query" placeholder="搜索发件人、主题、正文或验证码"><select id="message-account"><option value="">全部账号</option></select><select id="message-forward"><option value="">全部收件邮箱</option></select><select id="message-mailbox"><option value="">全部隐藏邮箱</option></select><input id="message-mailbox-query" list="message-mailbox-suggestions" placeholder="搜索邮箱地址或标签"><datalist id="message-mailbox-suggestions"></datalist><button id="collect-selected">同步所选收件邮箱</button><button id="search-messages">搜索</button></div></div>
+          <div id="inbox-summary" class="inbox-summary muted"></div>
+          <div id="all-messages" class="message-groups"></div>
+        </article>
+      </section>
+
+      <section id="view-orders" class="view hidden">
+        <div class="orders-grid">
+          <article class="panel allocation-panel">
+            <div class="allocation-panel-head"><div><span class="section-tag">FULFILLMENT</span><h2>分配邮箱并生成取件码</h2><p class="muted">选择一个或多个邮箱定向签发；不选择时自动分配一个可用邮箱。</p></div><div class="availability-badge"><strong id="allocation-available-count">0</strong><span>可用邮箱</span></div></div>
+            <div class="allocation-toolbar"><input id="order-mailbox-query" placeholder="搜索可用邮箱地址或标签"><button id="select-all-mailboxes" type="button" class="secondary">全选筛选结果</button><button id="clear-mailbox-selection" type="button" class="text-action">清空</button><strong id="allocation-selected-count">已选 0 个</strong></div>
+            <div id="allocation-mailboxes" class="allocation-mailboxes"></div>
+            <div class="form-grid"><label>外部订单号<input id="external-id" placeholder="例如：SHOP-20260808-001"></label><label>首次取件后有效时间（小时）<input id="ttl-hours" type="number" min="1" max="720" value="24"></label></div>
+            <button id="allocate" class="wide-button">生成发货信息</button>
+          </article>
+          <article id="delivery" class="panel delivery hidden">
+            <div class="one-time">仅显示一次</div><h2>取件信息已生成</h2>
+            <div id="delivery-single"><dl><dt>邮箱</dt><dd id="delivery-email"></dd><dt>长取件码</dt><dd id="delivery-code" class="secret-value"></dd><dt>取件网址</dt><dd id="delivery-url"></dd></dl></div>
+            <div id="delivery-batch-summary" class="delivery-batch-summary hidden"></div>
+            <div class="delivery-output-label">完整发货文本</div><pre id="delivery-text" class="delivery-text"></pre>
+            <button id="copy-delivery" type="button" class="wide-button">复制全部发货文本</button>
+          </article>
+        </div>
+        <article class="panel orders-list-panel">
+          <div class="panel-head"><div><h2>全部取件码与订单</h2><p class="muted">明文取件码不会永久保存；复制已签发订单时会生成新码，并立即使旧码失效。</p></div><select id="order-status"><option value="">全部状态</option><option value="active">有效</option><option value="expired">已过期</option></select></div>
+          <div class="order-copy-toolbar"><button id="select-active-orders" type="button" class="secondary">全选当前有效订单</button><button id="clear-order-selection" type="button" class="text-action">清空</button><strong id="selected-order-count">已选 0 个</strong><button id="copy-selected-orders" type="button" disabled>批量复制新码</button></div>
+          <div class="order-copy-format"><span>复制格式</span><code>邮箱-----取件码</code><small>每个订单一行</small></div>
+          <div class="table-wrap"><table><thead><tr><th class="order-select-column">选择</th><th>外部订单</th><th>邮箱</th><th>取件码</th><th>状态</th><th>签发时间</th><th>有效期/剩余时间</th><th>操作</th></tr></thead><tbody id="order-rows"></tbody></table></div>
+        </article>
+      </section>
+
+      <section id="view-accounts" class="view hidden">
+        <article class="panel account-connect-card">
+          <div class="panel-head"><div><h2>添加 iCloud 账号</h2><p class="muted">创建账号后立即进入网页登录授权。密码和双重验证码只在 Apple 官方页面输入。</p></div></div>
+          <div class="account-connect-form"><label>账号名称<input id="account-name" placeholder="例如：主账号"></label><label>iCloud 区域<select id="account-host"><option value="icloud.com">全球</option><option value="icloud.com.cn">中国大陆</option></select></label></div>
+          <button id="add-account" class="wide-button">添加账号并开始网页登录</button>
+          <div id="browser-auth-box" class="browser-auth-box hidden"><small>一次性授权请求五分钟内有效；管理页会先把凭证交给扩展，再打开标准 iCloud 登录页。</small><div class="browser-auth-actions"><button id="open-browser-auth" type="button" disabled>一键打开 iCloud 授权</button></div><p id="browser-auth-status">打开 iCloud 后，使用页面右上角的 CYMail 浮层确认授权。</p></div>
+        </article>
+        <article class="panel"><div class="panel-head"><div><h2>已添加账号</h2><p class="muted">这里显示后台真实保存的账号和授权状态。新接口（Apple Account 管理）启用后创建配额约 25 个/小时，否则仅旧接口约 5 个/小时。</p></div></div><div class="table-wrap"><table><thead><tr><th>名称</th><th>内部编号</th><th>iCloud 邮箱</th><th>隐藏邮箱</th><th>状态</th><th>新接口</th><th>最近校验</th><th>操作</th></tr></thead><tbody id="account-rows"></tbody></table></div></article>
+      </section>
+    </div>
+  </main>
+  <div id="toast" class="toast"></div>
+  <script src="/app.js?v=20260811-aa2" defer></script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CYMail 网页邮箱授权</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header><span>✦</span><div><strong>CYMail</strong><small>网页邮箱授权</small></div></header>
+    <p class="notice">请从 CYMail 后台点击授权，并在 Apple 或 163 官方页面完成登录。扩展不会读取你的密码或验证码。</p>
+    <section id="pending" class="pending hidden">
+      <small>待授权的 CYMail 后台</small>
+      <strong id="backend-host"></strong>
+      <span id="expires-at"></span>
+    </section>
+    <button id="open" class="secondary">重新打开 iCloud 官方登录</button>
+    <button id="authorize" disabled>我已登录，确认授权 CYMail</button>
+    <p id="status" role="status"></p>
+    <footer>只会向授权请求指定的 CYMail 后台发送 iCloud 会话 Cookie。</footer>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

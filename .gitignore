@@ -1,0 +1,4 @@
+# 运行数据与敏感文件（不入库）
+admin-server/.env
+admin-server/local-data/
+*.log
